@@ -340,6 +340,24 @@ button.primary{background:#17121a;color:#f6c9d6}
 @media(prefers-reduced-motion:reduce){.tk-t{animation:none}.tk-v{overflow-x:auto}}
 @media(max-width:640px){.tk-l{padding:0 11px;font-size:10px;letter-spacing:1px}.tk-i{font-size:12px}}
 @media print{.tk{display:none!important}}
+
+/* ===== period brief ===== */
+.digest{padding:22px 26px 24px}
+.digest h3{margin-bottom:12px}
+.dg-lead{margin:0 0 6px;font:500 20px/1.45 var(--fd);color:#fff;max-width:1100px}
+.dg-lead b{color:#fff}
+.dg-sub{margin:0 0 16px;font-size:13.5px;line-height:1.6;color:#d8c3cc}
+.dg-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.dg-sec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:14px 16px}
+.dg-h{font:700 10.5px var(--ff);letter-spacing:2px;color:#f4bfd0;text-transform:uppercase;margin-bottom:8px}
+.dg-sec ul{margin:0;padding-left:16px;font-size:13px;line-height:1.55}.dg-sec li{margin:6px 0}
+.dg-act{margin-top:14px;padding:14px 18px;border-radius:14px;background:linear-gradient(135deg,rgba(194,58,107,.22),rgba(110,22,54,.18));border:1px solid rgba(244,191,208,.28)}
+.dg-act ol{margin:0;padding:0;list-style:none;counter-reset:ac;display:grid;grid-template-columns:repeat(2,1fr);gap:8px 26px;font-size:13px;line-height:1.55}
+.dg-act li{counter-increment:ac;position:relative;padding-left:30px;margin:2px 0}
+.dg-act li:before{content:counter(ac);position:absolute;left:0;top:1px;width:21px;height:21px;border-radius:50%;background:linear-gradient(135deg,#ff6f9c,#a3274f);color:#fff;font:700 11.5px/21px var(--fd);text-align:center}
+.digest .dn{color:#ff9b8f}.digest .up{color:#7fdcb2}
+@media(max-width:1200px){.dg-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:760px){.dg-grid{grid-template-columns:1fr}.dg-act ol{grid-template-columns:1fr}.dg-lead{font-size:17px}.digest{padding:18px 16px}}
 </style>
 </head>
 <body>
@@ -696,16 +714,89 @@ function buildAlerts(){const A=[],d=ST.day;const sb=selBr();
 const sevPill=s=>s==="crit"?pill("CRITICAL","r"):s==="warn"?pill("WATCH","a"):pill("INFO","b");
 
 /* ========================= views ========================= */
-function digest(){const d=ST.day,rows=dayRows(RET,d).filter(r=>ST.br.has(r.br)),w=dayRows(WED,d).filter(r=>ST.br.has(r.br)&&r.fill>0);const pd=META.dates.filter(x=>x<d).pop();
-  const L=[];const prow=RET.filter(r=>r.date===pd&&ST.br.has(r.br)),common=rows.filter(r=>prow.some(p=>p.br===r.br)),a=aggR(rows),pa=aggR(prow.filter(p=>common.some(r=>r.br===p.br))),ca=aggR(common);
-  if(rows.length){const sorted=rows.slice().sort((x,y)=>(y.sales||0)-(x.sales||0));const ch=pa.n&&pa.sales?100*(ca.sales-pa.sales)/pa.sales:null;
-    L.push(`<b>Retail</b> sold <b>${fmtRF(a.sales)}</b> across ${rows.length} branch${rows.length>1?"es":""}${ch!=null?` — <span class="${ch>=0?"up":"dn"}">${ch>=0?"▲":"▼"} ${Math.abs(ch).toFixed(0)}% vs ${fmtD(pd)} (${common.length} like-for-like branch${common.length>1?"es":""})</span>`:""}. Best: <b>${title(sorted[0].br)}</b> ${fmtR(sorted[0].sales)}${sorted.length>1?`; lowest: <b>${title(sorted[sorted.length-1].br)}</b> ${fmtR(sorted[sorted.length-1].sales)}`:""}. Digital (card/UPI) ${a.digital!=null?a.digital.toFixed(0):"—"}% of payments.`)}
-  else L.push(`<b>Retail:</b> no reports for ${fmtD(d)} in the selected branches.`);
-  if(w.length){const x=aggW(w);L.push(`<b>Wedding</b> logged <b>${fmtN(x.enq)}</b> enquiries → <b>${fmtN(x.bookOk)}</b> bookings (${fp(x.conv)} ${x.convRep?"enquiry conversion":"booking rate"}${x.badBook?`; ${x.badBook} entr${x.badBook>1?"ies":"y"} with bookings above enquiries left out`:""})${x.billsN?`, <b>${fmtN(x.bills)}</b> bills${x.avgBill?` (avg ${fmtRF(x.avgBill)})`:""}`:""}, total sales <b>${fmtRF(x.total)}</b>, advances ${fmtRF(x.adv)}. Tomorrow: ${fmtN(sum(w,r=>r.tmrDel))} deliveries, ${fmtN(sum(w,r=>r.tmrRet))} returns due.`)}
-  const A=buildAlerts();const miss=A.filter(x=>/not submitted/.test(x.t));
-  L.push(`<b>DAR discipline:</b> ${selBr().length*2-miss.length}/${selBr().length*2} reports in${miss.length?` — missing: ${miss.map(m=>title(m.br)+" ("+m.dept+")").join(", ")}`:" — all branches reported"}.`);
-  L.push(`<b>Needs attention:</b> ${A.filter(x=>x.sev==="crit").length} critical, ${A.filter(x=>x.sev==="warn").length} watch items for ${fmtD(d)}.`);
-  return`<div class="digest"><button class="wa-btn" id="waCopy" title="Copy this brief as text for WhatsApp">Copy for WhatsApp</button><h3>DAILY BRIEF · ${fmtDL(d).toUpperCase()}</h3><ul>${L.map(x=>`<li>${x}</li>`).join("")}</ul></div>`}
+function digest(){
+  const single=ST.preset==="day",hdr=single?`DAILY BRIEF · ${fmtDL(ST.day).toUpperCase()}`:`PERIOD BRIEF · ${periodLabel().toUpperCase()}`;
+  const R=S.R,W=S.W.filter(r=>r.fill>0),WAB=`<button class="wa-btn" id="waCopy" title="Copy this brief as text for WhatsApp">Copy for WhatsApp</button>`;
+  if(!R.length&&!W.length){const last=META.dates[META.dates.length-1];
+    return`<div class="digest">${WAB}<h3>${hdr}</h3><p class="dg-lead">No DAR reports in this period for the selected branches.</p><p class="dg-sub">The latest report on file is <b>${fmtDY(last)}</b>. Use “Jump to latest day” or choose another period above.</p></div>`}
+  /* ---- previous comparison window ---- */
+  let pv=null,pvLabel="";
+  if(single){const pd=META.dates.filter(x=>x<ST.day).pop();if(pd){pv={R:RET.filter(r=>r.date===pd&&ST.br.has(r.br)),W:WED.filter(r=>r.date===pd&&ST.br.has(r.br)&&r.fill>0)};pvLabel=`the previous reporting day (${fmtD(pd)})`}}
+  else{const p=prevWindow();if(p){pv={R:p.R,W:p.W.filter(r=>r.fill>0)};pvLabel=`the previous ${dayDiff(p.from,p.to)+1} days (${fmtD(p.from)} – ${fmtD(p.to)})`}}
+  const a=aggR(R),w=aggW(W),pa=aggR(pv?pv.R:[]),pw=aggW(pv?pv.W:[]),sb=selBr();
+  const dn=(r,x)=>uniq(r.map(q=>q.date).concat(x.map(q=>q.date))).length,dCur=dn(R,W),dPrev=pv?dn(pv.R,pv.W):0;
+  const comb=a.sales+w.total,pcomb=pa.sales+pw.total,avgC=dCur?comb/dCur:null,avgP=dPrev?pcomb/dPrev:null,chg=avgP?100*(avgC-avgP)/avgP:null;
+  const ar=(v,d=1)=>v==null||!isFinite(v)?"":`<span class="${v>=0?"up":"dn"}">${v>=0?"▲":"▼"} ${Math.abs(v).toFixed(d)}%</span>`;
+  const ap=(v)=>v==null||!isFinite(v)?"":`<span class="${v>=0?"up":"dn"}">${v>=0?"▲":"▼"} ${Math.abs(v).toFixed(1)} pts</span>`;
+  const plural=(n,o,m)=>n===1?o:m;
+  /* ---- daily totals, momentum, best / weakest day ---- */
+  const dt={};R.forEach(r=>{dt[r.date]=(dt[r.date]||0)+(r.sales||0)});W.forEach(r=>{dt[r.date]=(dt[r.date]||0)+(r.total||0)});
+  const dk=Object.keys(dt).filter(d=>dt[d]>0).sort();let mom=null,bestD=null,weakD=null;
+  if(dk.length>=2){bestD=dk.reduce((x,y)=>dt[y]>dt[x]?y:x);weakD=dk.reduce((x,y)=>dt[y]<dt[x]?y:x)}
+  if(dk.length>=6){const h=Math.floor(dk.length/2),f=sum(dk.slice(0,h),d=>dt[d])/h,l=sum(dk.slice(-h),d=>dt[d])/h;mom=f?100*(l-f)/f:null}
+  /* ---- per-branch view ---- */
+  const bv=sb.map(b=>{const r=R.filter(x=>x.br===b),wr=W.filter(x=>x.br===b),pr=pv?pv.R.filter(x=>x.br===b):[];return{b,ra:aggR(r),pra:aggR(pr),wa:aggW(wr)}});
+  const rv=bv.filter(x=>x.ra.n>0).sort((p,q)=>q.ra.sales-p.ra.sales);
+  const movers=bv.filter(x=>x.ra.n>0&&x.pra.n>0&&x.pra.avg>0).map(x=>({b:x.b,c:100*(x.ra.avg-x.pra.avg)/x.pra.avg})).sort((p,q)=>q.c-p.c);
+  const hm=(typeof HM!=="undefined"&&HM&&HM.length)?HM:healthModel(),lostN=sum(hm,h=>h.lost||0),lostV=sum(hm,h=>h.left||0);
+  const cr=complRate(),A=buildAlerts(),crit=A.filter(x=>x.sev==="crit").length,warn=A.filter(x=>x.sev==="warn").length;
+  /* ---- headline ---- */
+  const lead=`<b>${fmtR(comb)}</b> combined revenue — retail <b>${fmtR(a.sales)}</b>${w.n?` + wedding <b>${fmtR(w.total)}</b>`:""}${dCur>1?`, averaging <b>${fmtR(avgC)}</b> per reporting day over ${dCur} days`:""}.`;
+  const subBits=[];
+  if(chg!=null)subBits.push(`${dCur>1?"Daily average is ":"Revenue is "}${ar(chg)} against ${pvLabel} (${fmtR(avgP)}${dCur>1?" per day":""})`);
+  else subBits.push(pv?`No data to compare in ${pvLabel}`:"No earlier period to compare with");
+  if(mom!=null)subBits.push(`momentum ${ar(mom)} — the later half of the period is running ${mom>=0?"above":"below"} the first half`);
+  if(bestD&&bestD!==weakD)subBits.push(`best day <b>${fmtDL(bestD)}</b> ${fmtR(dt[bestD])}, weakest <b>${fmtDL(weakD)}</b> ${fmtR(dt[weakD])}`);
+  const sub=subBits.join(" · ")+".";
+  /* ---- retail ---- */
+  const RL=[];
+  if(R.length){
+    const rch=pa.n&&pa.avg?100*(a.avg-pa.avg)/pa.avg:null;
+    RL.push(`Sold <b>${fmtRF(a.sales)}</b> across ${rv.length} ${plural(rv.length,"branch","branches")} (${a.n} branch-day ${plural(a.n,"report","reports")}), <b>${fmtR(a.avg)}</b> per report${rch!=null?` ${ar(rch)} vs ${single?"previous day":"previous period"}`:""}.`);
+    if(rv.length>1){const top=rv[0],lo=rv[rv.length-1],avgB=a.avg,gap=avgB?100*(avgB-lo.ra.avg)/avgB:null;
+      RL.push(`Best: <b>${title(top.b)}</b> ${fmtR(top.ra.sales)} (${fp(100*top.ra.sales/a.sales)} of retail). Lowest: <b>${title(lo.b)}</b> ${fmtR(lo.ra.sales)}${gap!=null&&gap>0?` — ${gap.toFixed(0)}% below the average report`:""}.`)}
+    const cb=bv.filter(x=>x.ra.pay>0).sort((p,q)=>q.ra.creditSh-p.ra.creditSh)[0];
+    RL.push(`Payments: digital <b>${fp(a.digital)}</b>, cash <b>${fp(a.pay?100*a.cash/a.pay:null)}</b>, credit <b>${fp(a.creditSh)}</b>${a.creditSh>CONFIG.CREDIT_PCT?` <span class="dn">(above the ${CONFIG.CREDIT_PCT}% guideline${cb&&cb.ra.creditSh>a.creditSh?`; highest at ${title(cb.b)} ${fp(cb.ra.creditSh)}`:""})</span>`:""}.`);
+    if(a.perStaff!=null)RL.push(`Sales per present staff <b>${fmtR(a.perStaff)}</b>${pa.perStaff?` ${ar(100*(a.perStaff-pa.perStaff)/pa.perStaff)}`:""}.`);
+    if(movers.length>1){const up=movers[0],dw=movers[movers.length-1];RL.push(`Movers vs previous: <b>${title(up.b)}</b> ${ar(up.c)}${dw.b!==up.b?`, <b>${title(dw.b)}</b> ${ar(dw.c)}`:""} (average per report).`)}
+  }else RL.push(`No retail reports in this period.`);
+  /* ---- wedding ---- */
+  const WL=[];
+  if(w.n){
+    WL.push(`<b>${fmtN(w.enq)}</b> enquiries → <b>${fmtN(w.bookOk)}</b> bookings, conversion <b>${fp(w.conv)}</b>${pw.conv!=null&&w.conv!=null?` ${ap(w.conv-pw.conv)}`:""}${w.conv!=null&&w.conv<CONFIG.CONV_MIN?` <span class="dn">(below the ${CONFIG.CONV_MIN}% target)</span>`:""}${w.badBook?` — ${w.badBook} ${plural(w.badBook,"entry","entries")} with bookings above enquiries left out`:""}.`);
+    WL.push(`Wedding sales <b>${fmtRF(w.total)}</b>${pw.total?` ${ar(100*((dCur?w.total/dCur:0)-(dPrev?pw.total/dPrev:0))/((dPrev?pw.total/dPrev:0)||1))}`:""}; advance collected <b>${fmtRF(w.adv)}</b> (${fp(w.collect)} of sales).`);
+    if(w.billsN)WL.push(`<b>${fmtN(w.bills)}</b> bills${w.avgBill?`, average bill <b>${fmtRF(w.avgBill)}</b>`:""}.`);
+    const bad=(w.compl||0)+(w.dmg||0)+(w.miss||0);
+    WL.push(`Deliveries <b>${fmtN(w.deliv)}</b>, returns <b>${fmtN(w.retn)}</b>${single?` · tomorrow: <b>${fmtN(sum(W,r=>r.tmrDel))}</b> deliveries, <b>${fmtN(sum(W,r=>r.tmrRet))}</b> returns due`:""}. ${bad?`<span class="dn">${fmtN(w.compl)} complaints, ${fmtN(w.dmg)} damaged, ${fmtN(w.miss)} missing</span>.`:"No damage, missing items or complaints."}`);
+    if(lostN>0)WL.push(`<span class="dn">${fmtN(lostN)} enquiries did not convert</span> — about <b>${fmtR(lostV)}</b> at average booking value.`);
+  }else WL.push(`No wedding reports in this period.`);
+  /* ---- people & discipline ---- */
+  const PL=[],att=pctN(a.pres+w.pres,a.staff+w.staff);
+  if(isFinite(att)&&att!=null){const ab=(a.abs||0);PL.push(`Attendance <b>${fp(att)}</b> (${fmtN(a.pres+w.pres)} of ${fmtN(a.staff+w.staff)} staff-days${ab?`, ${fmtN(ab)} absent in retail`:""})${att<CONFIG.ATTEND_MIN?` <span class="dn">— below ${CONFIG.ATTEND_MIN}%</span>`:""}.`)}
+  const lowAtt=bv.map(x=>({b:x.b,v:pctN(x.ra.pres+x.wa.pres,x.ra.staff+x.wa.staff)})).filter(x=>x.v!=null&&isFinite(x.v)&&x.v<CONFIG.ATTEND_MIN).sort((p,q)=>p.v-q.v);
+  if(lowAtt.length)PL.push(`Low attendance: ${lowAtt.slice(0,3).map(x=>`<b>${title(x.b)}</b> ${fp(x.v)}`).join(", ")}.`);
+  const lag=sb.map(b=>{let mr=0,mw=0;S.rDates.forEach(d=>{if(compl("R",d,b)!=="ok")mr++});S.wDates.forEach(d=>{if(compl("W",d,b)!=="ok")mw++});return{b,mr,mw,n:mr+mw}}).filter(x=>x.n>0).sort((p,q)=>q.n-p.n);
+  const totExp=cr.totR+cr.totW,totOk=cr.okR+cr.okW;
+  PL.push(`DAR discipline: <b>${cr.all!=null?fp(cr.all):"—"}</b> of expected reports submitted (${totOk}/${totExp})${lag.length?` — most missed: ${lag.slice(0,3).map(x=>`<b>${title(x.b)}</b> ${x.n} (${[x.mr?`retail ${x.mr}`:"",x.mw?`wedding ${x.mw}`:""].filter(Boolean).join(", ")})`).join("; ")}`:" — every branch reported"}.`);
+  PL.push(`${single?"Needs attention":`On ${fmtD(ST.day)}, the latest day in view`}: <b>${crit}</b> critical, <b>${warn}</b> watch ${plural(warn,"item","items")}.`);
+  /* ---- recommended actions ---- */
+  const AC=[];
+  if(chg!=null&&chg<=-5)AC.push(`<b>Revenue is ${Math.abs(chg).toFixed(0)}% lower</b> than ${pvLabel}. ${movers.length&&movers[movers.length-1].c<0?`Start with <b>${title(movers[movers.length-1].b)}</b> (${Math.abs(movers[movers.length-1].c).toFixed(0)}% down) — review stock, staffing and footfall there.`:"Review the branch table below for where the drop is coming from."}`);
+  if(lag.length)AC.push(`<b>Chase missing reports:</b> ${lag.slice(0,3).map(x=>title(x.b)).join(", ")} ${lag.length>3?`and ${lag.length-3} more `:""}${plural(lag.length,"has","have")} unsubmitted DARs — decisions are only as good as the data.`);
+  const hiCr=bv.filter(x=>x.ra.pay>0&&x.ra.creditSh>CONFIG.CREDIT_PCT).sort((p,q)=>q.ra.creditSh-p.ra.creditSh);
+  if(hiCr.length)AC.push(`<b>Tighten credit sales:</b> ${hiCr.slice(0,3).map(x=>`${title(x.b)} ${fp(x.ra.creditSh)}`).join(", ")} — above the ${CONFIG.CREDIT_PCT}% guideline. Confirm approvals and collection dates.`);
+  if(rv.length>2){const lo=rv[rv.length-1],gap=a.avg?100*(a.avg-lo.ra.avg)/a.avg:0;if(gap>=15)AC.push(`<b>Support ${title(lo.b)}:</b> its average report is ${gap.toFixed(0)}% below the network. Compare its product mix, staff on floor and display against ${title(rv[0].b)}.`)}
+  if(w.n&&(lostN>0||(w.conv!=null&&w.conv<CONFIG.CONV_MIN)))AC.push(`<b>Win back wedding enquiries:</b> ${lostN>0?`${fmtN(lostN)} enquiries did not convert (about ${fmtR(lostV)}). `:""}Assign a call-back owner for each open enquiry and review quotes within 48 hours.`);
+  if(lowAtt.length)AC.push(`<b>Attendance:</b> ${lowAtt.slice(0,2).map(x=>title(x.b)).join(" and ")} ${plural(lowAtt.length,"is","are")} under ${CONFIG.ATTEND_MIN}% — check leave planning and cover for peak days.`);
+  if(dk.length>=14){const wd={};dk.forEach(d=>{const k=new Date(d+"T00:00:00").getDay();(wd[k]=wd[k]||[]).push(dt[d])});const WN=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+    const ws=Object.keys(wd).filter(k=>wd[k].length>=2).map(k=>({k:+k,v:sum(wd[k],x=>x)/wd[k].length})).sort((p,q)=>q.v-p.v);
+    if(ws.length>=3)AC.push(`<b>Plan around the week:</b> ${WN[ws[0].k]} is the strongest day (${fmtR(ws[0].v)} average) and ${WN[ws[ws.length-1].k]} the quietest (${fmtR(ws[ws.length-1].v)}) — schedule staff, stock and promotions to match.`)}
+  if(single&&w.n){const td=sum(W,r=>r.tmrDel),tr=sum(W,r=>r.tmrRet);if(td||tr)AC.push(`<b>Tomorrow:</b> prepare ${fmtN(td)} ${plural(td,"delivery","deliveries")} and ${fmtN(tr)} ${plural(tr,"return","returns")} due.`)}
+  if(!AC.length)AC.push(`<b>No urgent actions.</b> Reports are in, credit and attendance are within limits — keep the current momentum.`);
+  const sec=(t,L)=>`<div class="dg-sec"><div class="dg-h">${t}</div><ul>${L.map(x=>`<li>${x}</li>`).join("")}</ul></div>`;
+  return`<div class="digest">${WAB}<h3>${hdr}</h3><p class="dg-lead">${lead}</p><p class="dg-sub">${sub}</p>
+    <div class="dg-grid">${sec("Retail",RL)}${sec("Wedding",WL)}${sec("People &amp; discipline",PL)}</div>
+    <div class="dg-act"><div class="dg-h">Recommended actions</div><ol>${AC.slice(0,6).map(x=>`<li>${x}</li>`).join("")}</ol></div></div>`}
 
 function vOverview(){HM=healthModel();const R=S.R,W=S.W,a=aggR(R),w=aggW(W),pw=prevWindow(),pa=pw?aggR(pw.R):null,pwa=pw?aggW(pw.W):null,cr=complRate();
   const tag=pw?`vs prev ${dayDiff(pw.from,pw.to)+1}d`:"";
@@ -1126,8 +1217,10 @@ function vSheet(){const u=sheetUrl();
     <div class="panel"><div class="pb">${ST.embed?`<iframe class="sh-frame" src="https://docs.google.com/spreadsheets/d/${id}/preview" title="MOCCA DAR Google Sheet" loading="lazy"></iframe><p class="note">If the preview stays blank, the sheet must be shared as “Anyone with the link – Viewer”.</p>`:`<p class="mute" style="margin:0 0 12px">Load the sheet here without leaving the dashboard.</p>`}<button id="shPrev" class="primary">${ST.embed?"Hide preview":"Show preview"}</button></div></div>`}
 $("#main").addEventListener("click",e=>{
   const hb=e.target.closest("[data-rkb]");if(hb){openBranch(hb.getAttribute("data-rkb"));return}
-  const wa=e.target.closest("#waCopy");if(wa){const dg=wa.closest(".digest"),t=[...dg.querySelectorAll("li")].map(li=>"• "+li.textContent.trim()).join("\n");
-    const msg="*MOCCA · Daily brief — "+fmtDL(ST.day)+"*\n\n"+t;const done=()=>{wa.textContent="Copied ✓";setTimeout(()=>{wa.textContent="Copy for WhatsApp"},1800)};
+  const wa=e.target.closest("#waCopy");if(wa){const dg=wa.closest(".digest"),P=[];const ld=dg.querySelector(".dg-lead"),sb2=dg.querySelector(".dg-sub");if(ld)P.push(ld.textContent.trim());if(sb2)P.push(sb2.textContent.trim());
+    dg.querySelectorAll(".dg-sec").forEach(sc=>{P.push("\n*"+sc.querySelector(".dg-h").textContent.trim()+"*");sc.querySelectorAll("li").forEach(li=>P.push("• "+li.textContent.trim()))});
+    const ac=dg.querySelectorAll(".dg-act li");if(ac.length){P.push("\n*Recommended actions*");ac.forEach((li,k)=>P.push((k+1)+". "+li.textContent.trim()))}
+    const msg="*MOCCA · "+dg.querySelector("h3").textContent.trim()+"*\n\n"+P.join("\n");const done=()=>{wa.textContent="Copied ✓";setTimeout(()=>{wa.textContent="Copy for WhatsApp"},1800)};
     (navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(msg):Promise.reject()).then(done).catch(()=>{window.prompt("Copy this brief",msg)});return}
   const rk=e.target.closest("#rankSeg button");if(rk){ST.rank=rk.dataset.rk;render();return}
   const cp=e.target.closest("#shCopy");if(cp){const u=sheetUrl();const done=()=>{cp.textContent="Link copied";setTimeout(()=>{cp.textContent="Copy link"},1800)};
