@@ -460,7 +460,7 @@ const CONFIG={
   AUTO_REFRESH_MINUTES:5,
   FY_START_MONTH:4,               // quarters start here: 4 = Apr–Jun is Q1 (Indian financial year). Use 1 for calendar quarters.
   BRANCHES:["PERINTHALMANNA","MANJERI","NILAMBUR","VENGARA","EDAPPAL","CHERPULASSERY"],
-  ALIASES:{CPY:"CHERPULASSERY",CHERPULASERY:"CHERPULASSERY",CHERPULLASERY:"CHERPULASSERY",PMNA:"PERINTHALMANNA",PERINTHALMANA:"PERINTHALMANNA",EDAPAL:"EDAPPAL",EDAPPAL:"EDAPPAL"},
+  ALIASES:{EDPL:"EDAPPAL",VNGRA:"VENGARA",MNJRY:"MANJERI",MANJERY:"MANJERI",NILAMBR:"NILAMBUR",CPY:"CHERPULASSERY",CHERPULASERY:"CHERPULASSERY",CHERPULLASERY:"CHERPULASSERY",PMNA:"PERINTHALMANNA",PERINTHALMANA:"PERINTHALMANNA",EDAPAL:"EDAPPAL",EDAPPAL:"EDAPPAL"},
   CONV_TARGET:75, HEALTH_W:{prod:25,mom:20,att:15,dar:15,conv:15,issues:10}, DROP_PCT:30, CREDIT_PCT:6, ATTEND_MIN:80, CONV_MIN:25, RECON_PCT:2
 };
 
@@ -1266,6 +1266,11 @@ $("#main").addEventListener("click",e=>{
    To ship targets inside the file, paste the exported JSON into TARGETS_SEED below.
    ===================================================================== */
 const TARGETS_SEED=null;
+/* Monthly targets (₹) received from management — loaded once per month into the daily grid, split evenly across the month.
+   Retail = Mens. Edit them any time in Targets → Set targets → Monthly target. */
+const MONTHLY_SEED={"2026-11":{
+  retail:{CPY:222000,VENGARA:1800000,PMNA:4610000,NILAMBUR:2570000,MANJERY:4610000,EDPL:4610000},
+  wedding:{CPY:525000,EDPL:2040000,VNGRA:545000,PMNA:2015000,NILAMBR:1120000,MNJRY:1560000}}};
 const TG_KEY="mocca_dar_targets_v1";
 const TG_GOOD=100,TG_WATCH=85;           /* ≥100% achieved · 85–99% close · <85% behind */
 const DOWN=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
@@ -1288,7 +1293,19 @@ const tgDepts=dept=>dept==="all"?["retail","wedding"]:[dept];
 function tgCell(dept,b,d){let t=0,a=0,miss=false;tgDepts(dept).forEach(k=>{const x=tgGet(k,b,d);if(!x)return;t+=x;const y=actOf(k,b,d);if(y==null)miss=true;else a+=y});return{t,a,miss}}
 const eachDay=(f,t)=>{const o=[];for(let d=f;d<=t;d=addDays(d,1))o.push(d);return o};
 const monthStartOf=iso=>{const p=parseISO(iso);return isoOf(p.y,p.m,1)};
+/* ---- monthly → daily split ---- */
+function tgSplit(total,n){const base=Math.floor(total/n),rem=total-base*n,o=[];for(let i=0;i<n;i++)o.push(base+Math.floor((i+1)*rem/n)-Math.floor(i*rem/n));return o}
+function tgMonthlyApply(m,dept,b,total,scope){const days=eachDay(m,monthEndISO(m));let pool=days,amount=total;
+  if(scope==="sixd")pool=days.filter(d=>dowMon(d)!==6);
+  if(scope==="empty"){const have=sum(days,d=>tgGet(dept,b,d));pool=days.filter(d=>!tgGet(dept,b,d));amount=total-have;if(amount<=0||!pool.length)return{n:0,err:`${title(b)} ${dept}: the days already add up to ${fmtRF(have)} — nothing left to split.`}}
+  else days.forEach(d=>tgSet(dept,b,d,0));
+  const parts=tgSplit(amount,pool.length);pool.forEach((d,i)=>tgSet(dept,b,d,parts[i]));return{n:pool.length}}
+function tgSeedMonthly(){let changed=false;for(const mo in MONTHLY_SEED){let flag=null;try{flag=localStorage.getItem("mocca_tg_seeded_"+mo)}catch(e){}if(flag)continue;
+  ["retail","wedding"].forEach(k=>{const sd=MONTHLY_SEED[mo][k]||{};for(const raw in sd){const b=normBranch(raw);if(!BR.includes(b))continue;const m=mo+"-01";if(sum(eachDay(m,monthEndISO(m)),d=>tgGet(k,b,d))>0)continue;tgMonthlyApply(m,k,b,sd[raw],"all");changed=true}});
+  try{localStorage.setItem("mocca_tg_seeded_"+mo,"1")}catch(e){}}
+  if(changed)tgSave()}
 const tgCut=()=>ST.to<META.max?ST.to:META.max;
+tgSeedMonthly();
 /* achievement counts only days that have a target for that branch/department */
 function tgCalc(dept,brs,from,to){
   const o={t:0,a:0,tdays:0,hit:0,miss:0,by:{},byDay:{},dow:Array.from({length:7},()=>({t:0,a:0}))};
@@ -1429,53 +1446,88 @@ function vTgAch(){
   return h}
 
 /* ---- Set targets ---- */
+const tgDeptList=()=>ST.tedept==="retail"?["retail"]:ST.tedept==="wedding"?["wedding"]:["retail","wedding"];
 function vTgSet(){
   if(!ST.tm)ST.tm=monthStartOf(ST.day||META.max||todayISO());
-  const dept=ST.tedept||"retail",p=parseISO(ST.tm),n=monthEnd(p.y,p.m),days=eachDay(ST.tm,isoOf(p.y,p.m,n)),T=todayISO();
-  const mt=(k,b)=>sum(days,d=>tgGet(k,b,d)),dn=dept==="retail"?"Retail":"Wedding";
-  const last=b=>{for(let i=days.length-1;i>=0;i--){const x=tgGet(dept,b,days[i]);if(x)return x}return""};
+  const p=parseISO(ST.tm),n=monthEnd(p.y,p.m),days=eachDay(ST.tm,isoOf(p.y,p.m,n)),T=todayISO(),depts=tgDeptList(),sel=ST.tedept||"both";
   let h=`<div class="tgbar"><button class="navb" data-tm="-1" aria-label="Previous month">‹</button><span class="mn">${MONF[p.m]} ${p.y}</span><button class="navb" data-tm="1" aria-label="Next month">›</button>`+
-   `<span class="seg" id="teSeg">${[["retail","Retail"],["wedding","Wedding"]].map(([k,l])=>`<button data-te="${k}" class="${dept===k?"on":""}">${l} targets</button>`).join("")}</span><span class="sp" style="flex:1"></span>`+
+   `<span class="seg" id="teSeg">${[["both","Retail + Wedding"],["retail","Retail only"],["wedding","Wedding only"]].map(([k,l])=>`<button data-te="${k}" class="${sel===k?"on":""}">${l}</button>`).join("")}</span><span class="sp" style="flex:1"></span>`+
    `<button data-tgact="copyprev" title="Copy last month's daily targets into this month">Copy previous month</button><button data-tgact="clearmonth">Clear month</button><button data-tgact="exportjson">Export JSON</button><button data-tgact="exportcsv">Export CSV</button><label class="btn" style="margin:0">Import<input type="file" id="tgImp" accept=".json,.csv" style="display:none"></label></div>`;
   h+=`<div class="kpis k4" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">`+
    [["tgS-retail","Retail · month target","Sum of every daily retail target"],["tgS-wedding","Wedding · month target","Sum of every daily wedding target"],["tgS-all","MOCCA overall · month target","Retail + wedding, all branches"]].map(([id,l,c])=>`<div class="kpi"><div class="l">${l}</div><div class="v" id="${id}">—</div><div class="c">${c}</div></div>`).join("")+`</div>`;
-  h+=panel(`Quick fill — ${dn} daily target per branch`,
-    `<div class="row" style="padding:0"><label class="mute" style="font-size:12px">Fill</label><select id="qfScope"><option value="all">every day of the month</option><option value="sixd">Mon–Sat only (skip Sundays)</option><option value="empty">only days that are still empty</option></select>`+
-    `<span class="sp"></span><input type="text" class="tin qa" id="qfAll" placeholder="Same for all (e.g. 50000, 50k, 1.5L)" style="max-width:260px"><button data-tgact="fillinputs">Copy to every branch</button><button class="primary" data-tgact="applyall">Apply to all branches</button></div>`+
-    `<div class="qf">${BR.map(b=>`<div class="c"><b>${dotB(b)}${title(b)}</b><input type="text" inputmode="numeric" class="tin qa" id="qf-${b}" placeholder="₹ per day" value="${last(b)||""}"><button data-tgact="apply" data-b="${b}">Apply to ${title(b)}</button></div>`).join("")}</div>`,
-    {sub:`Type the daily target once, apply it to the month, then adjust individual days in the grid below. Shortcuts: 50k = 50,000 · 1.5L = 1,50,000 · 1cr = 1,00,00,000.`});
-  /* grid */
-  let rows="",grp=[];const wkNo=(()=>{let i=0;return()=>++i})();
-  const flush=()=>{if(!grp.length)return;const ws=addDays(grp[0],-dowMon(grp[0])),a=parseISO(grp[0]).d,b=parseISO(grp[grp.length-1]).d;
-    rows+=`<tr class="wk"><td colspan="2">Week ${wkNo()} · ${a}–${b} ${MON[p.m]} <span style="font-weight:400">(Σ of ${grp.length} day${grp.length>1?"s":""})</span></td>${BR.map(x=>`<td data-tws="${ws}|${x}">–</td>`).join("")}<td data-tws="${ws}|ALL">–</td></tr>`;grp=[]};
-  days.forEach(d=>{const dw=dowMon(d);
-    rows+=`<tr class="${dw===6?"sun":""}${d===T?" tod":""}"><td>${parseISO(d).d} ${MON[p.m]}</td><td class="mute">${DOWN[dw]}</td>${BR.map(b=>{const v=tgGet(dept,b,d);return`<td><input class="tin" inputmode="numeric" data-tgi="${b}|${d}" data-col="${b}" value="${v||""}" placeholder="–" aria-label="${title(b)} ${fmtD(d)}"></td>`}).join("")}<td class="ac" data-tdd="${d}">–</td></tr>`;
-    grp.push(d);if(dw===6)flush()});flush();
-  rows+=`<tr class="mt"><td colspan="2">${MONF[p.m]} total (Σ days)</td>${BR.map(b=>`<td data-tmt="${b}">–</td>`).join("")}<td data-tmt="ALL">–</td></tr>`;
-  h+=`<h2>${dn} daily targets <small>${MONF[p.m]} ${p.y} · amounts in ₹ · weekly rows and the monthly total add up automatically</small></h2>`+
-    `<div class="panel"><div class="tw tgrid" style="max-height:660px"><table class="tgrid"><tr><th class="l">Date</th><th>Day</th>${BR.map(b=>`<th>${dotB(b)}${title(b)}</th>`).join("")}<th>All branches</th></tr>${rows}</table></div></div>`+
-    `<p class="note">Saved automatically in this browser. Use <b>Export JSON</b> to back up or move targets to another computer, and <b>Import</b> to load them. Weeks run Monday–Sunday; a week that spans two months is split at the month boundary in this grid, but is added up whole in the Achievement view.</p>`;
-  after.push(tgUpdateTotals);return h}
+  h+=tgModeBar();
+  h+=ST.tmode==="daily"?tgDailyPanel():tgMonthlyPanel();
+  depts.forEach(k=>{h+=tgGridHtml(k,days,p,T)});
+  h+=`<p class="note">Saved automatically in this browser. Use <b>Export JSON</b> to back up or move targets to another computer, and <b>Import</b> to load them. Weeks run Monday–Sunday; a week that spans two months is split at the month boundary in this grid, but is added up whole in the Achievement view.</p>`;
+  after.push(tgUpdateTotals);after.push(tgMtPreview);after.push(tgDqPreview);return h}
 
+function tgGridHtml(dept,days,p,T){const dn=dept==="retail"?"Retail":"Wedding";let rows="",grp=[],wk=0;
+  const flush=()=>{if(!grp.length)return;const ws=addDays(grp[0],-dowMon(grp[0])),a=parseISO(grp[0]).d,b=parseISO(grp[grp.length-1]).d;wk++;
+    rows+=`<tr class="wk"><td colspan="2">Week ${wk} · ${a}–${b} ${MON[p.m]} <span style="font-weight:400">(Σ of ${grp.length} day${grp.length>1?"s":""})</span></td>${BR.map(x=>`<td data-tws="${dept}|${ws}|${x}">–</td>`).join("")}<td data-tws="${dept}|${ws}|ALL">–</td></tr>`;grp=[]};
+  days.forEach(d=>{const dw=dowMon(d);
+    rows+=`<tr class="${dw===6?"sun":""}${d===T?" tod":""}"><td>${parseISO(d).d} ${MON[p.m]}</td><td class="mute">${DOWN[dw]}</td>${BR.map(b=>{const v=tgGet(dept,b,d);return`<td><input class="tin" inputmode="numeric" data-tgi="${dept}|${b}|${d}" data-col="${dept}|${b}" value="${v||""}" placeholder="–" aria-label="${dn} ${title(b)} ${fmtD(d)}"></td>`}).join("")}<td class="ac" data-tdd="${dept}|${d}">–</td></tr>`;
+    grp.push(d);if(dw===6)flush()});flush();
+  rows+=`<tr class="mt"><td colspan="2">${MONF[p.m]} total (Σ days)</td>${BR.map(b=>`<td data-tmt="${dept}|${b}">–</td>`).join("")}<td data-tmt="${dept}|ALL">–</td></tr>`;
+  return`<h2>${dn} daily targets <small>${MONF[p.m]} ${p.y} · amounts in ₹ · weekly rows and the monthly total add up automatically</small></h2>`+
+    `<div class="panel"><div class="tw tgrid" style="max-height:600px"><table class="tgrid"><tr><th class="l">Date</th><th>Day</th>${BR.map(b=>`<th>${dotB(b)}${title(b)}</th>`).join("")}<th>All branches</th></tr>${rows}</table></div></div>`}
+
+function tgDailyPanel(){const days=eachDay(ST.tm,monthEndISO(ST.tm)),nd=days.length,sunN=days.filter(d=>dowMon(d)===6).length,p=parseISO(ST.tm);
+  const last=(k,b)=>{for(let i=days.length-1;i>=0;i--){const x=tgGet(k,b,days[i]);if(x)return x}return""};
+  const inp=(k,b)=>`<input type="text" inputmode="numeric" class="tin qa" data-dq="${k}|${b}" value="${last(k,b)||""}" placeholder="₹ per day" aria-label="${title(b)} ${k} daily target">`;
+  const rows=BR.map(b=>`<tr><td class="l">${dotB(b)}<b>${title(b)}</b></td><td>${inp("retail",b)}</td><td class="mute" style="text-align:right" data-dqm="retail|${b}">–</td><td>${inp("wedding",b)}</td><td class="mute" style="text-align:right" data-dqm="wedding|${b}">–</td></tr>`).join("");
+  return panel(`Daily target — set a per-day amount for each branch`,
+    `<div class="row" style="padding:0 0 12px"><label class="mute" style="font-size:12px">Fill</label><select id="qfScope"><option value="all">every day of the month (${nd} days)</option><option value="sixd">Mon–Sat only — skip ${sunN} Sundays (${nd-sunN} days)</option><option value="empty">only days that are still empty</option></select><span class="sp"></span>`+
+    `<input type="text" class="tin qa" id="dqAllR" placeholder="Retail — same for all" style="max-width:190px"><input type="text" class="tin qa" id="dqAllW" placeholder="Wedding — same for all" style="max-width:190px"><button data-tgact="dqcopy">Copy to every branch</button><button class="primary" data-tgact="dqapply">Apply daily targets</button></div>`+
+    `<div class="tw"><table><tr><th class="l">Branch</th><th>Retail · daily ₹</th><th>→ month</th><th>Wedding · daily ₹</th><th>→ month</th></tr>${rows}</table></div>`,
+    {sub:`${MONF[p.m]} ${p.y}: type the per-day amount for Retail and Wedding, then apply. “→ month” shows what it adds up to. Fine-tune single days in the grids below. Shortcuts: 50k = 50,000 · 1.5L = 1,50,000.`})}
+function tgDqPreview(){const m=ST.tm;if(!m||!document.querySelector("[data-dq]"))return;const days=eachDay(m,monthEndISO(m)),sc=($("#qfScope")||{}).value||"all";
+  BR.forEach(b=>["retail","wedding"].forEach(k=>{const el=document.querySelector(`[data-dq="${k}|${b}"]`),v=tgNum(el&&el.value),cell=document.querySelector(`[data-dqm="${k}|${b}"]`);if(!cell)return;
+    let pool=days.length;if(sc==="sixd")pool=days.filter(d=>dowMon(d)!==6).length;
+    let tot=v*pool;if(sc==="empty"){tot=sum(days,d=>tgGet(k,b,d))+v*days.filter(d=>!tgGet(k,b,d)).length}
+    cell.textContent=v?fmtRF(tot):"–"}))}
+
+function tgModeBar(){const m=ST.tmode==="daily"?"daily":"monthly";return`<div class="row" style="margin:0 0 14px"><span class="seg" id="tmSeg"><button data-tmode="monthly" class="${m==="monthly"?"on":""}">📅 Monthly target (auto-split)</button><button data-tmode="daily" class="${m==="daily"?"on":""}">☀ Daily target</button></span><span class="mute" style="font-size:12px">Enter it either way — weekly and monthly totals always equal the sum of the daily targets.</span></div>`}
+function tgMonthlyPanel(){const p=parseISO(ST.tm),days=eachDay(ST.tm,monthEndISO(ST.tm)),nd=days.length,sunN=days.filter(d=>dowMon(d)===6).length,cur=(k,b)=>sum(days,d=>tgGet(k,b,d)),hasSeed=!!MONTHLY_SEED[ST.tm.slice(0,7)];
+  const inp=(k,b)=>`<input type="text" inputmode="numeric" class="tin qa" data-mt="${k}|${b}" value="${cur(k,b)||""}" placeholder="monthly ₹" aria-label="${title(b)} ${k} monthly target">`;
+  const rows=BR.map(b=>`<tr><td class="l">${dotB(b)}<b>${title(b)}</b></td><td>${inp("retail",b)}</td><td class="mute" style="text-align:right" data-mtp="retail|${b}">–</td><td>${inp("wedding",b)}</td><td class="mute" style="text-align:right" data-mtp="wedding|${b}">–</td><td style="text-align:right;font-weight:700" data-mtt="${b}">–</td></tr>`).join("");
+  return panel(`Monthly target — enter once, it splits into daily targets automatically`,
+    `<div class="row" style="padding:0 0 12px"><label class="mute" style="font-size:12px">Split across</label><select id="mtScope"><option value="all">every day of the month (${nd} days)</option><option value="sixd">Mon–Sat only — skip ${sunN} Sundays (${nd-sunN} days)</option><option value="empty">only days that are still empty</option></select><span class="sp"></span>${hasSeed?`<button data-tgact="mtpreset" title="Fill the boxes with the monthly targets received from management">Fill with received targets</button>`:""}<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--grey);margin:0;white-space:nowrap"><input type="checkbox" id="mtAll" style="width:auto;min-width:0">Re-split every branch</label><button data-tgact="mtreload">Reset to current</button><button class="primary" data-tgact="mtsplit">Split into daily targets</button></div>`+
+    `<div class="tw"><table><tr><th class="l">Branch</th><th>Retail (Mens) · monthly ₹</th><th>per day</th><th>Wedding · monthly ₹</th><th>per day</th><th>Combined / month</th></tr>${rows}<tr class="tot"><td class="l">MOCCA overall</td><td style="text-align:right" data-mtsum="retail">–</td><td></td><td style="text-align:right" data-mtsum="wedding">–</td><td></td><td style="text-align:right" data-mtsum="all">–</td></tr></table></div>`,
+    {sub:`${MONF[p.m]} ${p.y}: type the monthly amount for each branch (50k, 1.5L, 1cr also work). It is divided evenly into daily targets — any rounding remainder is spread so the days add up to exactly the monthly figure. Only the amounts you change are re-split; fine-tune single days in the grid below.`})}
+function tgMtPreview(){const m=ST.tm;if(!m||!document.querySelector("[data-mt]"))return;const days=eachDay(m,monthEndISO(m)),scope=($("#mtScope")||{}).value||"all",sums={retail:0,wedding:0};
+  BR.forEach(b=>{let tot=0;["retail","wedding"].forEach(k=>{const el=document.querySelector(`[data-mt="${k}|${b}"]`),v=tgNum(el&&el.value),cell=document.querySelector(`[data-mtp="${k}|${b}"]`);sums[k]+=v;tot+=v;
+    let pool=days.length,amt=v;if(scope==="sixd")pool=days.filter(d=>dowMon(d)!==6).length;if(scope==="empty"){const have=sum(days,d=>tgGet(k,b,d));pool=days.filter(d=>!tgGet(k,b,d)).length;amt=v-have}
+    if(cell)cell.textContent=v&&pool&&amt>0?fmtRF(Math.round(amt/pool)):"–"});
+    const tc=document.querySelector(`[data-mtt="${b}"]`);if(tc)tc.textContent=tot?fmtRF(tot):"–"});
+  [["retail",sums.retail],["wedding",sums.wedding],["all",sums.retail+sums.wedding]].forEach(([k,v])=>{const e=document.querySelector(`[data-mtsum="${k}"]`);if(e)e.textContent=v?fmtRF(v):"–"})}
 function tgUpdateTotals(){
-  if(!ST.tm)return;const dept=ST.tedept||"retail",p=parseISO(ST.tm),days=eachDay(ST.tm,isoOf(p.y,p.m,monthEnd(p.y,p.m)));
+  if(!ST.tm)return;const p=parseISO(ST.tm),days=eachDay(ST.tm,isoOf(p.y,p.m,monthEnd(p.y,p.m)));
   const dsum=(k,ds,b)=>b==="ALL"?sum(ds,d=>sum(BR,x=>tgGet(k,x,d))):sum(ds,d=>tgGet(k,b,d));
-  document.querySelectorAll("[data-tdd]").forEach(c=>{const d=c.dataset.tdd;c.textContent=f0(sum(BR,b=>tgGet(dept,b,d)))});
-  document.querySelectorAll("[data-tws]").forEach(c=>{const [ws,b]=c.dataset.tws.split("|");c.textContent=f0(dsum(dept,days.filter(d=>addDays(d,-dowMon(d))===ws),b))});
-  document.querySelectorAll("[data-tmt]").forEach(c=>{c.textContent=f0(dsum(dept,days,c.dataset.tmt))});
+  document.querySelectorAll("[data-tdd]").forEach(c=>{const [k,d]=c.dataset.tdd.split("|");c.textContent=f0(sum(BR,b=>tgGet(k,b,d)))});
+  document.querySelectorAll("[data-tws]").forEach(c=>{const [k,ws,b]=c.dataset.tws.split("|");c.textContent=f0(dsum(k,days.filter(d=>addDays(d,-dowMon(d))===ws),b))});
+  document.querySelectorAll("[data-tmt]").forEach(c=>{const [k,b]=c.dataset.tmt.split("|");c.textContent=f0(dsum(k,days,b))});
   const r=dsum("retail",days,"ALL"),w=dsum("wedding",days,"ALL");
-  [["tgS-retail",r],["tgS-wedding",w],["tgS-all",r+w]].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.textContent=v?fmtR(v):"—"})}
+  [["tgS-retail",r],["tgS-wedding",w],["tgS-all",r+w]].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.textContent=v?fmtRF(v):"—"})}
 
 /* ---- target actions ---- */
 function tgDl(name,text,type){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click()}
-function tgFill(b,val,scope){const p=parseISO(ST.tm),dept=ST.tedept||"retail";let c=0;eachDay(ST.tm,isoOf(p.y,p.m,monthEnd(p.y,p.m))).forEach(d=>{if(scope==="sixd"&&dowMon(d)===6)return;if(scope==="empty"&&tgGet(dept,b,d))return;tgSet(dept,b,d,val);c++});return c}
+function tgFill(dept,b,val,scope){const p=parseISO(ST.tm);let c=0;eachDay(ST.tm,isoOf(p.y,p.m,monthEnd(p.y,p.m))).forEach(d=>{if(scope==="sixd"&&dowMon(d)===6)return;if(scope==="empty"&&tgGet(dept,b,d))return;tgSet(dept,b,d,val);c++});return c}
 function tgAction(a,btn){
-  const dept=ST.tedept||"retail",p=parseISO(ST.tm),days=eachDay(ST.tm,isoOf(p.y,p.m,monthEnd(p.y,p.m))),scope=($("#qfScope")||{}).value||"all";
-  if(a==="apply"){const b=btn.dataset.b,v=tgNum($("#qf-"+b).value);if(!v){notice("err","Enter a daily target (₹) for "+title(b)+" first.");return}const c=tgFill(b,v,scope);tgSave();render();notice("ok",`${title(b)}: ${fmtRF(v)} set on ${c} day${c!==1?"s":""} of ${MONF[p.m]}.`)}
-  else if(a==="applyall"){let n=0,c=0;BR.forEach(b=>{const v=tgNum($("#qf-"+b).value);if(v){c=tgFill(b,v,scope);n++}});if(!n){notice("err","Type a daily target in at least one branch box first.");return}tgSave();render();notice("ok",`Daily targets applied for ${n} branch${n>1?"es":""} across ${MONF[p.m]}.`)}
-  else if(a==="fillinputs"){const v=tgNum($("#qfAll").value);if(!v){notice("err","Enter an amount in the “Same for all” box.");return}BR.forEach(b=>$("#qf-"+b).value=v)}
-  else if(a==="copyprev"){const pm=addMonths(ST.tm,-1),pp=parseISO(pm),pn=monthEnd(pp.y,pp.m);if(!confirm(`Copy ${MONF[pp.m]} ${pp.y} ${dept} targets into ${MONF[p.m]} ${p.y}? Existing values for this month will be replaced.`))return;let c=0;BR.forEach(b=>days.forEach((d,i)=>{if(i+1>pn)return;const v=tgGet(dept,b,isoOf(pp.y,pp.m,i+1));tgSet(dept,b,d,v);if(v)c++}));tgSave();render();notice(c?"ok":"err",c?`Copied ${c} daily targets from ${MONF[pp.m]}.`:`${MONF[pp.m]} has no ${dept} targets to copy.`)}
-  else if(a==="clearmonth"){if(!confirm(`Clear all ${dept} targets for ${MONF[p.m]} ${p.y}?`))return;BR.forEach(b=>days.forEach(d=>tgSet(dept,b,d,0)));tgSave();render();notice("ok",`${MONF[p.m]} ${dept} targets cleared.`)}
+  const depts=tgDeptList(),p=parseISO(ST.tm),days=eachDay(ST.tm,isoOf(p.y,p.m,monthEnd(p.y,p.m))),scope=($("#qfScope")||{}).value||"all";
+  if(a==="dqapply"){let n=0;["retail","wedding"].forEach(k=>BR.forEach(b=>{const el=document.querySelector(`[data-dq="${k}|${b}"]`),v=tgNum(el&&el.value);if(v){tgFill(k,b,v,scope);n++}}));
+    if(!n){notice("err","Type a daily target in at least one box first.");return}tgSave();render();notice("ok",`Daily targets applied for ${n} branch/department entr${n>1?"ies":"y"} across ${MONF[p.m]}.`)}
+  else if(a==="dqcopy"){const r=tgNum($("#dqAllR").value),w=tgNum($("#dqAllW").value);if(!r&&!w){notice("err","Enter an amount in a “same for all” box first.");return}
+    BR.forEach(b=>{if(r)document.querySelector(`[data-dq="retail|${b}"]`).value=r;if(w)document.querySelector(`[data-dq="wedding|${b}"]`).value=w});tgDqPreview()}
+  else if(a==="copyprev"){const pm=addMonths(ST.tm,-1),pp=parseISO(pm),pn=monthEnd(pp.y,pp.m);if(!confirm(`Copy ${MONF[pp.m]} ${pp.y} ${depts.join(" + ")} targets into ${MONF[p.m]} ${p.y}? Existing values for this month will be replaced.`))return;let c=0;depts.forEach(k=>BR.forEach(b=>days.forEach((d,i)=>{if(i+1>pn)return;const v=tgGet(k,b,isoOf(pp.y,pp.m,i+1));tgSet(k,b,d,v);if(v)c++})));tgSave();render();notice(c?"ok":"err",c?`Copied ${c} daily targets from ${MONF[pp.m]}.`:`${MONF[pp.m]} has no targets to copy.`)}
+  else if(a==="clearmonth"){if(!confirm(`Clear all ${depts.join(" + ")} targets for ${MONF[p.m]} ${p.y}?`))return;depts.forEach(k=>BR.forEach(b=>days.forEach(d=>tgSet(k,b,d,0))));tgSave();render();notice("ok",`${MONF[p.m]} targets cleared.`)}
+  else if(a==="mtsplit"){const m=ST.tm,sc=($("#mtScope")||{}).value||"all";let n=0;const errs=[];
+    ["retail","wedding"].forEach(k=>BR.forEach(b=>{const el=document.querySelector(`[data-mt="${k}|${b}"]`),v=tgNum(el&&el.value);if(!v)return;
+      const cur=sum(eachDay(m,monthEndISO(m)),d=>tgGet(k,b,d));if(v===cur&&!($("#mtAll")||{}).checked)return;
+      const r=tgMonthlyApply(m,k,b,v,sc);if(r.err)errs.push(r.err);else n++}));
+    if(!n&&!errs.length){notice("err","No monthly amount was changed. Edit a branch's amount (or tick “Re-split every branch”) and try again.");return}
+    tgSave();render();notice(n?"ok":"err",n?`Monthly targets split into daily targets for ${n} branch/department entr${n>1?"ies":"y"} in ${MONF[p.m]} ${p.y}.`+(errs.length?" "+errs.join(" "):""):errs.join(" "))}
+  else if(a==="mtreload")render();
+  else if(a==="mtpreset"){const sd=MONTHLY_SEED[ST.tm.slice(0,7)];if(!sd)return;["retail","wedding"].forEach(k=>{for(const raw in (sd[k]||{})){const b=normBranch(raw),el=document.querySelector(`[data-mt="${k}|${b}"]`);if(el)el.value=sd[k][raw]}});tgMtPreview()}
   else if(a==="exportjson")tgDl("mocca_targets.json",JSON.stringify(TG,null,1),"application/json");
   else if(a==="exportcsv"){const o=[];["retail","wedding"].forEach(k=>BR.forEach(b=>Object.keys(TG[k][b]||{}).sort().forEach(d=>o.push({date:d,branch:b,dept:k,target:TG[k][b][d]}))));tgDl("mocca_targets.csv",csv(o,["date","branch","dept","target"]),"text/csv")}}
 function tgImport(file){const fr=new FileReader();fr.onload=()=>{try{const t=String(fr.result);let n=0;
@@ -1578,9 +1630,13 @@ $("#main").addEventListener("click",e=>{
   const td=e.target.closest("[data-td]");if(td){ST.tdept=td.dataset.td;render();return}
   const te=e.target.closest("[data-te]");if(te){ST.tedept=te.dataset.te;render();return}
   const tm=e.target.closest("[data-tm]");if(tm){ST.tm=addMonths(ST.tm,+tm.dataset.tm);render();return}
+  const tmo=e.target.closest("[data-tmode]");if(tmo){ST.tmode=tmo.dataset.tmode;render();notice("","");return}
   const ta=e.target.closest("[data-tgact]");if(ta)tgAction(ta.dataset.tgact,ta)});
-$("#main").addEventListener("input",e=>{const t=e.target;if(!t.dataset||!t.dataset.tgi)return;const [b,d]=t.dataset.tgi.split("|");tgSet(ST.tedept||"retail",b,d,tgNum(t.value));tgSave();tgUpdateTotals()});
-$("#main").addEventListener("change",e=>{const t=e.target;if(t.dataset&&t.dataset.tgi){const [b,d]=t.dataset.tgi.split("|");t.value=tgGet(ST.tedept||"retail",b,d)||""}
+$("#main").addEventListener("input",e=>{if(e.target.dataset&&e.target.dataset.mt)tgMtPreview()});
+$("#main").addEventListener("input",e=>{const t=e.target;if(t.dataset&&t.dataset.dq){tgDqPreview();return}if(!t.dataset||!t.dataset.tgi)return;const [k,b,d]=t.dataset.tgi.split("|");tgSet(k,b,d,tgNum(t.value));tgSave();tgUpdateTotals()});
+$("#main").addEventListener("change",e=>{const t=e.target;if(t.dataset&&t.dataset.tgi){const [k,b,d]=t.dataset.tgi.split("|");t.value=tgGet(k,b,d)||""}
+  if(t.id==="qfScope")tgDqPreview();
+  if(t.id==="mtScope")tgMtPreview();
   if(t.id==="tgImp"&&t.files[0]){tgImport(t.files[0]);t.value=""}});
 $("#main").addEventListener("keydown",e=>{const t=e.target;if(!t.dataset||!t.dataset.tgi)return;const k=e.key;if(k!=="Enter"&&k!=="ArrowDown"&&k!=="ArrowUp")return;
   const col=[...document.querySelectorAll(`input[data-col="${t.dataset.col}"]`)],i=col.indexOf(t),n=col[k==="ArrowUp"?i-1:i+1];if(n){e.preventDefault();n.focus();n.select()}});
