@@ -461,7 +461,9 @@ const CONFIG={
   FY_START_MONTH:4,               // quarters start here: 4 = Apr–Jun is Q1 (Indian financial year). Use 1 for calendar quarters.
   BRANCHES:["PERINTHALMANNA","MANJERI","NILAMBUR","VENGARA","EDAPPAL","CHERPULASSERY"],
   ALIASES:{EDPL:"EDAPPAL",VNGRA:"VENGARA",MNJRY:"MANJERI",MANJERY:"MANJERI",NILAMBR:"NILAMBUR",CPY:"CHERPULASSERY",CHERPULASERY:"CHERPULASSERY",CHERPULLASERY:"CHERPULASSERY",PMNA:"PERINTHALMANNA",PERINTHALMANA:"PERINTHALMANNA",EDAPAL:"EDAPPAL",EDAPPAL:"EDAPPAL"},
-  CONV_TARGET:75, HEALTH_W:{prod:25,mom:20,att:15,dar:15,conv:15,issues:10}, DROP_PCT:30, CREDIT_PCT:6, ATTEND_MIN:80, CONV_MIN:25, RECON_PCT:2
+  CONV_TARGET:75, HEALTH_W:{prod:25,mom:20,att:15,dar:15,conv:15,issues:10}, DROP_PCT:30, CREDIT_PCT:6, ATTEND_MIN:80, CONV_MIN:25, RECON_PCT:2,
+  MOM_WEEKS:3,       // how many earlier periods the selection is compared with: Day → previous 3 same weekdays, Week → previous 3 weeks, Month → previous 3 months, Quarter → previous 3 quarters
+  MOM_MIN_BASE:2     // Day / Week comparisons need at least this many earlier periods with reports (Month / Quarter need 1)
 };
 
 /* ========================= helpers ========================= */
@@ -992,7 +994,57 @@ function issueRegister(){const out=[],key=new Map();
 
 /* ========================= decision metrics ========================= */
 const avgOf=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
-function momentum(b){const rows=RET.filter(r=>r.br===b&&r.sales&&r.date<=ST.to).sort((x,y)=>x.date<y.date?-1:1);if(rows.length<4)return null;const last=rows.slice(-3),prior=rows.slice(-7,-3);if(prior.length<2)return null;return 100*(avgOf(last.map(r=>r.sales))-avgOf(prior.map(r=>r.sales)))/avgOf(prior.map(r=>r.sales))}
+/* Like-for-like momentum that follows the selected period:
+   Day → that day vs the same weekday in the previous 3 weeks (Monday vs 3 Mondays)
+   Week (7 days / this / last week) → the same days of the previous 3 weeks
+   Month → the same days of the previous 3 months · Quarter → the previous 3 quarters
+   Custom → by its length · All → the latest 7 days vs the 3 weeks before (All data has no earlier period). */
+const minISO=(a,b)=>a<b?a:b;
+function momSpec(){
+  const p=ST.preset,f=ST.from,t=ST.to,len=dayDiff(f,t)+1,N=CONFIG.MOM_WEEKS;
+  const monthSh=w=>{const sf=addMonths(f,-w),full=t===monthEndISO(f);return[sf,full?monthEndISO(sf):minISO(addDays(sf,len-1),monthEndISO(sf))]};
+  const weekSh=(a,z)=>w=>[addDays(a,-7*w),addDays(z,-7*w)];
+  let kind,cf=f,ct=t,sh;
+  if(p==="day"||(p==="custom"&&len===1)){kind="day";cf=ct=p==="day"?ST.day:f;sh=weekSh(cf,ct)}
+  else if(p==="7d"||p==="tw"||p==="lw"||(p==="custom"&&len<=7)){kind="week";sh=weekSh(f,t)}
+  else if(p==="tm"||p==="lm"||(p==="custom"&&parseISO(f).d===1&&len>=28&&len<=31)){kind="month";sh=monthSh}
+  else if(p==="tq"||p==="lq"){kind="quarter";sh=w=>{const sf=addMonths(f,-3*w),full=t===quarterEnd(f);return[sf,full?quarterEnd(sf):minISO(addDays(sf,len-1),quarterEnd(sf))]}}
+  else if(p==="all"){kind="latest7";cf=addDays(t,-6);ct=t;sh=weekSh(cf,ct)}
+  else{kind="span";sh=w=>[addDays(f,-len*w),addDays(t,-len*w)]}
+  return{kind,N,cf,ct,len:dayDiff(cf,ct)+1,sh,minBase:(kind==="month"||kind==="quarter")?1:CONFIG.MOM_MIN_BASE};
+}
+function winStat(b,from,to){const rows=RET.filter(r=>r.br===b&&r.sales&&r.date>=from&&r.date<=to);const n=rows.length,sm=sum(rows,r=>r.sales);return{from,to,n,sum:sm,val:n?sm/n:null,len:dayDiff(from,to)+1}}
+function momDetail(b){
+  const sp=momSpec();if(!ST.from)return null;
+  const cur=winStat(b,sp.cf,sp.ct);
+  const need=l=>sp.kind==="day"?1:(sp.kind==="week"||sp.kind==="latest7")?Math.ceil(.5*l):Math.min(l,Math.max(3,Math.ceil(.3*l)));
+  if(!cur.n||cur.n<need(cur.len))return null;
+  const wins=[];for(let w=1;w<=sp.N;w++){const[ff,tt]=sp.sh(w);const x=winStat(b,ff,tt);x.ok=x.n>0&&x.n>=need(x.len);wins.push(x)}
+  const ok=wins.filter(x=>x.ok);if(ok.length<sp.minBase)return null;
+  const base=avgOf(ok.map(x=>x.val));
+  return{pct:100*(cur.val-base)/base,kind:sp.kind,cur,wins,base,nOk:ok.length,spec:sp};
+}
+const rngTxt=(f,t)=>f===t?fmtDL(f).replace(/ \d{4}$/,""):`${fmtD(f)} – ${fmtD(t)}`;
+function momTexts(){
+  const sp=momSpec(),N=sp.N,k=sp.kind,mb=sp.minBase;
+  const dn=k==="day"?new Date(sp.cf+"T00:00:00Z").toLocaleDateString("en-GB",{weekday:"long",timeZone:"UTC"}):"";
+  const T={
+    day:{sub:`Selected day vs the same weekday in the previous ${N} weeks`,short:"vs the same weekday in earlier weeks",unit:"wk",head:"Sales",
+      note:`Like-for-like: the selected day is compared with the <b>same weekday in the previous ${N} weeks</b> — a ${dn} against the ${N} ${dn}s before it. At least ${mb} of them must have a report.`},
+    week:{sub:`${PN[ST.preset]||"Selected days"} vs the same days of the previous ${N} weeks`,short:"vs the same days of earlier weeks",unit:"wk",head:"Avg / day",
+      note:`Like-for-like: the selected week is compared with the <b>same days of the previous ${N} weeks</b> (for “this week” that means Monday to today of each earlier week). Values are average sales per reported day. At least ${mb} earlier weeks must have reports.`},
+    latest7:{sub:`Latest 7 days vs the previous ${N} weeks (All data has no earlier period)`,short:"vs the earlier weeks",unit:"wk",head:"Avg / day",
+      note:`“All” covers every day, so there is nothing earlier to compare it with. The <b>latest 7 days</b> are compared with the <b>${N} weeks before them</b>. Pick Day, a week or a month for a period-matched comparison. Values are average sales per reported day.`},
+    month:{sub:`${PN[ST.preset]||"Selected month"} vs the same days of the previous ${N} months`,short:"vs the earlier months",unit:"mo",head:"Avg / day",
+      note:`Like-for-like: the selected month (or month so far) is compared with the <b>same days of the previous ${N} months</b>. Values are average sales per reported day, so a shorter or part-filled earlier month does not distort it. Months with too few reports are skipped.`},
+    quarter:{sub:`${PN[ST.preset]||"Selected quarter"} vs the same days of the previous ${N} quarters`,short:"vs the earlier quarters",unit:"qtr",head:"Avg / day",
+      note:`Like-for-like: the selected quarter is compared with the <b>same days of the previous ${N} quarters</b>. Values are average sales per reported day. Quarters with too few reports are skipped.`},
+    span:{sub:`Selected ${sp.len} days vs the previous ${N} windows of ${sp.len} days`,short:`vs the earlier ${sp.len}-day windows`,unit:"win",head:"Avg / day",
+      note:`The selected ${sp.len}-day range is compared with the <b>${N} equal windows right before it</b>. Values are average sales per reported day.`}
+  };
+  return T[k];
+}
+function momentum(b){const d=momDetail(b);return d?d.pct:null}
 function brCompl(b){let ok=0,t=0;S.rDates.forEach(d=>{t++;if(compl("R",d,b)==="ok")ok++});S.wDates.forEach(d=>{t++;if(compl("W",d,b)==="ok")ok++});return pctN(ok,t)}
 const clamp=(v,a=0,b=100)=>Math.max(a,Math.min(b,v));
 let HM=null;
@@ -1007,7 +1059,7 @@ function healthModel(){const sb=selBr(),A=buildAlerts(),Wv=S.W.filter(r=>r.fill>
     const lost=goodBooks.length?Math.max(0,gb.enq-gb.book):0,left=avgBook?lost*avgBook:0,upside=avgBook&&gb.enq?Math.max(0,CONFIG.CONV_TARGET/100*gb.enq-gb.book)*avgBook:0;
     const balance=sum(wr,r=>r.total!=null&&r.advance!=null?Math.max(0,r.total-r.advance):0);
     const lowest=Object.entries(comp).sort((x,y)=>x[1]-y[1])[0][0];
-    return{b,rr,ww,idx,mom,dar,att:attN,crit,warn,comp,score,status:score>=75?["Strong","g"]:score>=58?["Stable","a"]:["At risk","r"],avgBook,lost,left,upside,balance,lowest,attRet:rr.att}});
+    return{b,rr,ww,idx,mom,momD:momDetail(b),dar,att:attN,crit,warn,comp,score,status:score>=75?["Strong","g"]:score>=58?["Stable","a"]:["At risk","r"],avgBook,lost,left,upside,balance,lowest,attRet:rr.att}});
   rows.sort((x,y)=>y.score-x.score);return rows}
 const COMPN={prod:"Productivity",mom:"Momentum",att:"Attendance",dar:"DAR discipline",conv:"Conversion",issues:"Open issues"};
 function runRate(){const sb=selBr();let r=0,w=0,n=0;sb.forEach(b=>{const rr=S.R.filter(x=>x.br===b&&x.sales),ww=S.W.filter(x=>x.br===b&&x.fill>0&&x.total);if(rr.length)r+=sum(rr,x=>x.sales)/rr.length;if(ww.length)w+=sum(ww,x=>x.total)/ww.length;n=Math.max(n,rr.length)});return{r:r*30,w:w*30,days:n}}
@@ -1015,7 +1067,7 @@ function recommendations(H){const out=[],P=prodStats([...S.R,...S.W]);
   const add=(pr,b,why,act,owner)=>out.push({pr,b,why,act,owner});
   H.forEach(h=>{const b=h.b;
     if(h.score<58)add(1,b,`Health score ${h.score.toFixed(0)} — weakest area: ${COMPN[h.lowest]}`,"Hold a branch review call this week; agree a 7-day recovery plan","Area manager");
-    if(h.mom!=null&&h.mom<=-20&&h.mom<NETMOM-8)add(1,b,`Sales momentum ${h.mom.toFixed(0)}% — ${(NETMOM-h.mom).toFixed(0)} points worse than the network (${NETMOM.toFixed(0)}%)`,"Check footfall, stock-outs on top sellers and roster; run a weekend push","Retail in-charge");
+    if(h.mom!=null&&h.mom<=-20&&h.mom<NETMOM-8)add(1,b,`Sales momentum ${h.mom.toFixed(0)}% ${momTexts().short} — ${(NETMOM-h.mom).toFixed(0)} points worse than the network (${NETMOM.toFixed(0)}%)`,"Check footfall, stock-outs on top sellers and roster; run a weekend push","Retail in-charge");
     if(h.rr.creditSh!=null&&h.rr.creditSh>=CONFIG.CREDIT_PCT)add(1,b,`Credit is ${h.rr.creditSh.toFixed(1)}% of payments (${fmtR(h.rr.credit)})`,"Set a credit limit / follow-up list; review approvals","Accounts + in-charge");
     if(h.idx!=null&&h.idx<.7&&h.att>=CONFIG.ATTEND_MIN)add(2,b,`Sales per present staff is ${(h.idx*100).toFixed(0)}% of network average`,"Review roster vs footfall hours and set individual sales targets","Area manager");
     if(h.idx!=null&&h.idx>1.35&&S.R.some(r=>r.br===b&&isYes(r.addMan)))add(2,b,`High productivity (${(h.idx*100).toFixed(0)}% of avg) and extra manpower requested`,"Approve additional staff — demand is outrunning the team","HR / Area manager");
@@ -1040,13 +1092,17 @@ function vDecisions(){const H=healthModel(),a=aggR(S.R),Wv=S.W.filter(r=>r.fill>
    kpi("Credit exposure",fmtR(a.credit),`${a.creditSh!=null?a.creditSh.toFixed(1)+"% of retail payments":"—"}`,{cls:a.creditSh>CONFIG.CREDIT_PCT?"bad":""})+
    kpi("Wedding balance to collect",fmtR(bal),`Total sales − advance · advance ${w.collect!=null?w.collect.toFixed(0)+"%":"—"} of total`,{})+`</div>`;
   const sc=v=>`<td class="cmp ${v>=70?"g":v<45?"r":"n"}">${v.toFixed(0)}</td>`;
-  h+=`<h2>Branch health score <small>${periodLabel()} · one number per branch, built from six weighted checks</small></h2>`+pnlT("Ranking, drivers and the weakest area",`<div class="tw"><table><tr><th class="l"># Branch</th><th>Health</th><th>Status</th><th title="Sales per present staff vs network average">Productivity</th><th title="Last 3 reported days vs previous days, relative to the network trend">Momentum (vs network)</th><th>Attendance</th><th>DAR filing</th><th>Wedding conv.</th><th>Open issues</th><th class="l">Fix first</th></tr>`+
+  h+=`<h2>Branch health score <small>${periodLabel()} · one number per branch, built from six weighted checks</small></h2>`+pnlT("Ranking, drivers and the weakest area",`<div class="tw"><table><tr><th class="l"># Branch</th><th>Health</th><th>Status</th><th title="Sales per present staff vs network average">Productivity</th><th title="Selected period vs the earlier equal periods — Day: same weekday in the previous 3 weeks · Week: previous 3 weeks · Month: previous 3 months — relative to the network trend">Momentum (vs network)</th><th>Attendance</th><th>DAR filing</th><th>Wedding conv.</th><th>Open issues</th><th class="l">Fix first</th></tr>`+
    H.map((x,i)=>`<tr><td class="l"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${BCOL[x.b]};margin-right:7px"></span>${i+1}. ${title(x.b)}</td><td><span class="sc ${x.status[1]}">${x.score.toFixed(0)}</span></td><td>${pill(x.status[0],x.status[1]==="g"?"g":x.status[1]==="a"?"a":"r")}</td>${sc(x.comp.prod)}${sc(x.comp.mom)}${sc(x.comp.att)}${sc(x.comp.dar)}${sc(x.comp.conv)}${sc(x.comp.issues)}<td class="l" style="font-weight:400">${COMPN[x.lowest]} <span class="mute">(${x.comp[x.lowest].toFixed(0)})</span></td></tr>`).join("")+`</table></div><p class="note" style="padding:0 16px 12px">Each driver is scored 0–100, then weighted: ${Object.entries(CONFIG.HEALTH_W).map(([k,v])=>`${COMPN[k]} ${v}%`).join(" · ")}. Strong ≥ 75 · Stable 58–74 · At risk &lt; 58. Momentum is judged against the network trend. Missing data scores a neutral 60. Weights can be changed in CONFIG.</p>`);
   const recs=recommendations(H);
   h+=`<h2>Decisions to make this week <small>generated from the rules above — ${recs.length} suggestions</small></h2>`+pnlT("Prioritised action list",recs.length?`<div class="list" style="max-height:520px">`+recs.map(r=>`<div class="q"><div class="sv">${pill(r.pr===1?"HIGH":r.pr===2?"MEDIUM":"IDEA",r.pr===1?"r":r.pr===2?"a":"b")}</div><div class="a"><b>${title(r.b)} — ${esc(r.act)}</b><span>Why: ${esc(r.why)}</span></div><div class="o">${esc(r.owner)}</div></div>`).join("")+`</div>`:`<div class="empty">✓ No actions suggested</div>`);
   const mrows=H.filter(x=>x.mom!=null).sort((x,y)=>y.mom-x.mom),mx=Math.max(...mrows.map(x=>Math.abs(x.mom)),20);
   h+=`<div class="grid2" style="margin-top:18px">`+
-   panel("Sales momentum",mrows.length?mrows.map(x=>`<div class="dv" ${tipAttr(`<b>${title(x.b)}</b><br>Last 3 reported days vs previous days<br>${x.mom>=0?"+":""}${x.mom.toFixed(1)}%`)}><div class="hl">${title(x.b)}</div><div class="tr"><i style="${x.mom>=0?`left:50%;width:${x.mom/mx*50}%;background:#1e7b55;border-radius:0 4px 4px 0`:`right:50%;width:${-x.mom/mx*50}%;background:#c0392b;border-radius:4px 0 0 4px`}"></i></div><div class="hv ${x.mom>=0?"good":"bad"}">${x.mom>=0?"▲":"▼"} ${Math.abs(x.mom).toFixed(0)}%</div></div>`).join("")+`<p class="note">Is each branch speeding up or slowing down? Needs at least 4 days of reports.${NETMOM<-10?` <b>The whole network is down ${Math.abs(NETMOM).toFixed(0)}% versus the early-week days</b> (month-start / weekend peak), so the health score and actions judge each branch against that trend.`:""}</p>`:noData,{sub:"Last 3 reporting days vs the days before"})+
+   panel("Sales momentum",mrows.length?mrows.map(x=>`<div class="dv" ${tipAttr(`<b>${title(x.b)}</b><br>${momTexts().sub}<br>${x.mom>=0?"+":""}${x.mom.toFixed(1)}%<br><br><b>${rngTxt(x.momD.cur.from,x.momD.cur.to)}</b>: ${fmtR(x.momD.cur.val)}${x.momD.kind==="day"?"":" / day ("+x.momD.cur.n+" days)"}<br>`+x.momD.wins.map(p=>`vs ${rngTxt(p.from,p.to)}: ${p.ok?fmtR(p.val)+(x.momD.kind==="day"?"":" / day ("+p.n+" d)"):(p.n?"too few reports":"no reports")}`).join("<br>")+`<br>usual ${fmtR(x.momD.base)} (avg of ${x.momD.nOk})`)}><div class="hl">${title(x.b)}</div><div class="tr"><i style="${x.mom>=0?`left:50%;width:${x.mom/mx*50}%;background:#1e7b55;border-radius:0 4px 4px 0`:`right:50%;width:${-x.mom/mx*50}%;background:#c0392b;border-radius:4px 0 0 4px`}"></i></div><div class="hv ${x.mom>=0?"good":"bad"}">${x.mom>=0?"▲":"▼"} ${Math.abs(x.mom).toFixed(0)}%</div></div>`).join("")+
+     `<p class="note">${momTexts().note}${NETMOM<-10?` <b>The whole network is ${Math.abs(NETMOM).toFixed(0)}% below its usual level for this comparison</b>, so the health score and actions judge each branch against that trend.`:""}${H.some(x=>x.mom==null)?` <span class="mute">No comparison yet for: ${H.filter(x=>x.mom==null).map(x=>title(x.b)).join(", ")} (no report in the selected period or not enough earlier reports).</span>`:""}</p>`+
+     `<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:700;font-size:13px">Show the comparison table</summary><div class="tw" style="margin-top:8px"><table><tr><th class="l">Branch</th><th class="l">Selected</th><th>${momTexts().head}</th>`+Array.from({length:CONFIG.MOM_WEEKS},(_,i)=>`<th>${i+1} ${momTexts().unit==="win"?"window":momTexts().unit} back</th>`).join("")+`<th>Usual (avg)</th><th>Change</th></tr>`+
+     mrows.map(x=>`<tr><td class="l">${title(x.b)}</td><td class="l">${rngTxt(x.momD.cur.from,x.momD.cur.to)}</td><td>${fmtR(x.momD.cur.val)}</td>`+x.momD.wins.map(p=>`<td title="${rngTxt(p.from,p.to)} · ${p.n} reported day${p.n===1?"":"s"}">${p.ok?fmtR(p.val):"—"}</td>`).join("")+`<td>${fmtR(x.momD.base)}</td><td class="${x.mom>=0?"good":"bad"}">${x.mom>=0?"+":""}${x.mom.toFixed(0)}%</td></tr>`).join("")+`</table></div></details>`:
+     `<p class="empty">Not enough earlier history for this selection yet. ${ST.preset==="month"||ST.preset==="tm"||ST.preset==="lm"?"A month comparison needs reports from at least one earlier month.":ST.preset==="tq"||ST.preset==="lq"?"A quarter comparison needs reports from an earlier quarter.":"Try a Day, week or All view, or wait for more weeks of reports."}</p>`,{sub:momTexts().sub})+
    panel("Staff productivity vs network",H.slice().sort((x,y)=>(y.idx||0)-(x.idx||0)).map(x=>{const i=x.idx==null?0:x.idx;return`<div class="hb" ${tipAttr(`<b>${title(x.b)}</b><br>Sales per present staff ${fmtRF(x.rr.perStaff)}<br>Network avg ${fmtRF(aggR(S.R).perStaff)}`)}><div class="hl">${title(x.b)}</div><div class="ht" style="position:relative"><i style="width:${Math.min(i/2,1)*100}%;background:${i<.7?"#c0392b":i>1.2?"#1e7b55":"#a3274f"}"></i><span style="position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:#2a2a2a"></span></div><div class="hv">${(i*100).toFixed(0)}<small>${fmtR(x.rr.perStaff)}/staff</small></div></div>`}).join("")+`<p class="note">Index 100 (black line) = network average sales per present staff member. Below 70 → review roster; above 135 with manpower asks → hire.</p>`,{sub:"Sales per present staff, indexed to the network"})+`</div>`;
   h+=`<h2>Revenue levers <small>${periodLabel()}</small></h2><div style="display:grid;gap:18px">`+
    pnlT("Wedding — conversion &amp; ticket size",`<div class="tw"><table><tr><th class="l">Branch</th><th>Enq.</th><th>Conv.</th><th>Avg booking</th><th>Avg bill</th><th>Sales / enquiry</th><th>Lost enq.</th><th>Value at stake</th><th>Upside @ ${CONFIG.CONV_TARGET}%</th></tr>`+H.map(x=>`<tr><td class="l">${title(x.b)}</td><td>${fmtN(x.ww.enq)}</td><td class="${x.ww.conv!=null&&x.ww.conv<CONFIG.CONV_MIN?"bad":""}">${fp(x.ww.conv)}</td><td>${fmtR(x.avgBook)}</td><td>${x.ww.avgBill?fmtR(x.ww.avgBill):"—"}</td><td>${fmtR(x.ww.enq?x.ww.total/x.ww.enq:null)}</td><td>${fmtN(x.lost)}</td><td>${fmtR(x.left)}</td><td>${x.upside>0?pill(fmtR(x.upside),"a"):"—"}</td></tr>`).join("")+`<tr style="background:var(--grey-l)"><td class="l"><b>Network</b></td><td><b>${fmtN(w.enq)}</b></td><td><b>${fp(w.conv)}</b></td><td><b>${fmtR(w.book?w.bookVal/w.book:null)}</b></td><td><b>${w.avgBill?fmtR(w.avgBill):"—"}</b></td><td><b>${fmtR(w.enq?w.total/w.enq:null)}</b></td><td><b>${fmtN(sum(H,x=>x.lost))}</b></td><td><b>${fmtR(left)}</b></td><td><b>${fmtR(up)}</b></td></tr></table></div><p class="note" style="padding:0 16px 12px">Value at stake = lost enquiries (enquiries − bookings) × that branch's average booking value. Rows where bookings exceed enquiries are excluded.</p>`)+
